@@ -1,0 +1,1 @@
+ALTER TABLE rooms ADD COLUMN room_name VARCHAR(100);
