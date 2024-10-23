@@ -3,12 +3,12 @@
 import java.sql.*;
 import java.util.*;
 import java.util.stream.Collectors;
-import javax.json.Json;
-import javax.json.JsonArrayBuilder;
-import javax.json.JsonObject;
-import javax.json.JsonObjectBuilder;
-import javax.json.JsonWriter;
-import java.io.StringWriter;
+// import javax.json.Json;
+// import javax.json.JsonArrayBuilder;
+// import javax.json.JsonObject;
+// import javax.json.JsonObjectBuilder;
+// import javax.json.JsonWriter;
+// import java.io.StringWriter;
 // Other imports remain unchanged...
 
 
@@ -178,22 +178,35 @@ public class floorManagement {
         }
     }
 
-public static void addPlan(Connection conn, Scanner sc) {
+    public static void addPlan(Connection conn, Scanner sc) {
     try {
         System.out.print("Enter floor number: ");
         int floorNumber = sc.nextInt();
         sc.nextLine();  // Consume newline
 
+        // First, retrieve the floor ID based on the floor number
+        String getFloorIdSql = "SELECT id FROM floors WHERE floor_number = ?";
+        PreparedStatement getFloorIdPstmt = conn.prepareStatement(getFloorIdSql);
+        getFloorIdPstmt.setInt(1, floorNumber);
+        ResultSet floorRs = getFloorIdPstmt.executeQuery();
+
+        if (!floorRs.next()) {
+            System.out.println("Floor number " + floorNumber + " does not exist.");
+            return; // Exit if the floor does not exist
+        }
+
+        int floorId = floorRs.getInt("id");
+
         // Check if a plan already exists for this floor in "floor_plans"
-        String checkFloorSql = "SELECT COUNT(*) FROM floor_plans WHERE floor_number = ?";
+        String checkFloorSql = "SELECT COUNT(*) FROM floor_plans WHERE floor_id = ?";
         PreparedStatement checkFloorPstmt = conn.prepareStatement(checkFloorSql);
-        checkFloorPstmt.setInt(1, floorNumber);
+        checkFloorPstmt.setInt(1, floorId);
         ResultSet rs = checkFloorPstmt.executeQuery();
         rs.next();
 
         if (rs.getInt(1) > 0) {
             // Floor plan already exists, don't add it again
-            System.out.println("Floor number " + floorNumber + " already exists in the finalized plans.");
+            System.out.println("A floor plan already exists for floor number " + floorNumber + ".");
             return;
         }
 
@@ -204,68 +217,60 @@ public static void addPlan(Connection conn, Scanner sc) {
         int priority = sc.nextInt();
         sc.nextLine();  // Consume newline
 
+        // Prepare to store room details
+        List<Room> rooms = new ArrayList<>();
         System.out.print("Enter the number of rooms on this floor: ");
         int numberOfRooms = sc.nextInt();
         sc.nextLine();  // Consume newline
 
-        // Create JSON array to hold room details
-        JsonArrayBuilder roomsArrayBuilder = Json.createArrayBuilder();
-
         for (int i = 1; i <= numberOfRooms; i++) {
             System.out.println("Details for Room " + i + ":");
-
+            System.out.print("Room Name: ");
+            String roomName = sc.nextLine();
             System.out.print("Capacity: ");
             int capacity = sc.nextInt();
             sc.nextLine();  // Consume newline
-
-            System.out.print("Room Name: ");
-            String roomName = sc.nextLine();
-
-            // Insert into "rooms" table
-            String insertRoomSql = "INSERT INTO rooms (floor_number, capacity, room_name, available) VALUES (?, ?, ?, true)";
-            PreparedStatement insertRoomPstmt = conn.prepareStatement(insertRoomSql);
-            insertRoomPstmt.setInt(1, floorNumber);
-            insertRoomPstmt.setInt(2, capacity);
-            insertRoomPstmt.setString(3, roomName);
-            insertRoomPstmt.executeUpdate();
-
-            // Create a JSON object for this room
-            JsonObject roomDetails = Json.createObjectBuilder()
-                    .add("room_name", roomName)
-                    .add("capacity", capacity)
-                    .build();
-
-            // Add the room details to the rooms array
-            roomsArrayBuilder.add(roomDetails);
-
-            System.out.println("Room " + roomName + " added successfully on floor " + floorNumber + ".");
+            
+            // Create room object
+            rooms.add(new Room(roomName, capacity));
         }
 
-        // Convert the rooms array to a JSON object
-        JsonObject planDetailsJson = Json.createObjectBuilder()
-                .add("rooms", roomsArrayBuilder)
-                .build();
-
-        StringWriter stringWriter = new StringWriter();
-        try (JsonWriter jsonWriter = Json.createWriter(stringWriter)) {
-            jsonWriter.write(planDetailsJson);
-        }
-        String planDetails = stringWriter.toString();  // Convert the JSON object to a string
-
-        // Insert into the "floor_plans" table (finalized plans)
-        String insertPlanSql = "INSERT INTO floor_plans (floor_number, plan_details, finalised_by, priority, is_finalised) VALUES (?, ?, ?, ?, true)";
-        PreparedStatement insertPlanPstmt = conn.prepareStatement(insertPlanSql);
-        insertPlanPstmt.setInt(1, floorNumber);
-        insertPlanPstmt.setString(2, planDetails);
+        // Insert into "floor_plans" table
+        String insertPlanSql = "INSERT INTO floor_plans (floor_id, plan_details, finalised_by, priority, is_finalised) VALUES (?, ?, ?, ?, true)";
+        PreparedStatement insertPlanPstmt = conn.prepareStatement(insertPlanSql, Statement.RETURN_GENERATED_KEYS);
+        insertPlanPstmt.setInt(1, floorId); // Use floor ID from previous query
+        insertPlanPstmt.setString(2, "Floor " + floorNumber + " plan finalized by " + adminName); // Using plan details
         insertPlanPstmt.setString(3, adminName);
         insertPlanPstmt.setInt(4, priority);
         insertPlanPstmt.executeUpdate();
+        
+        // Get the generated floor plan ID
+        ResultSet generatedKeys = insertPlanPstmt.getGeneratedKeys();
+        int floorPlanId = 0;
+        if (generatedKeys.next()) {
+            floorPlanId = generatedKeys.getInt(1);
+        }
 
-        // Insert into the "floor_plan_versions" table (for version history)
-        String insertVersionSql = "INSERT INTO floor_plan_versions (floor_number, plan_details, finalised_by, priority, version_timestamp) VALUES (?, ?, ?, ?, NOW())";
+        // Insert room details into "rooms" table
+        String insertRoomSql = "INSERT INTO rooms (floor_id, room_name, capacity, available) VALUES (?, ?, ?, true)";
+        PreparedStatement insertRoomPstmt = conn.prepareStatement(insertRoomSql);
+        
+        for (Room room : rooms) {
+            insertRoomPstmt.setInt(1, floorId);  // Linking room to the correct floor
+            insertRoomPstmt.setString(2, room.getRoomName());
+            insertRoomPstmt.setInt(3, room.getCapacity());
+            insertRoomPstmt.executeUpdate();
+            System.out.println("Room " + room.getRoomName() + " added successfully.");
+        }
+
+        // Prepare plan details for versions
+        String planDetails = "Floor " + floorNumber + " plan finalized by " + adminName;
+
+        // Insert into "floor_plan_versions" table
+        String insertVersionSql = "INSERT INTO floor_plan_versions (floor_plan_id, previous_plan_details, finalised_by, priority) VALUES (?, ?, ?, ?)";
         PreparedStatement insertVersionPstmt = conn.prepareStatement(insertVersionSql);
-        insertVersionPstmt.setInt(1, floorNumber);
-        insertVersionPstmt.setString(2, planDetails);
+        insertVersionPstmt.setInt(1, floorPlanId);  // Use the ID of the inserted floor plan
+        insertVersionPstmt.setString(2, planDetails); // Using previous plan details
         insertVersionPstmt.setString(3, adminName);
         insertVersionPstmt.setInt(4, priority);
         insertVersionPstmt.executeUpdate();
@@ -277,6 +282,24 @@ public static void addPlan(Connection conn, Scanner sc) {
     }
 }
 
+// Room class to hold room details
+public static class Room {
+    private String roomName;
+    private int capacity;
+
+    public Room(String roomName, int capacity) {
+        this.roomName = roomName;
+        this.capacity = capacity;
+    }
+
+    public String getRoomName() {
+        return roomName;
+    }
+
+    public int getCapacity() {
+        return capacity;
+    }
+}
 
 
     public static void updatePlan(Connection conn, Scanner sc) {
@@ -286,7 +309,10 @@ public static void addPlan(Connection conn, Scanner sc) {
         sc.nextLine(); // Consume newline
 
         // Check if a floor plan already exists for this floor
-        String checkPlanSql = "SELECT id, finalised_by, priority FROM floor_plans WHERE floor_number = ? AND is_finalised = TRUE";
+        String checkPlanSql = "SELECT fp.id, fp.finalised_by, fp.priority " +
+                               "FROM floor_plans fp " +
+                               "JOIN floors f ON fp.floor_id = f.id " +
+                               "WHERE f.floor_number = ? AND fp.is_finalised = TRUE";
         PreparedStatement checkPlanPstmt = conn.prepareStatement(checkPlanSql);
         checkPlanPstmt.setInt(1, floorNumber);
         ResultSet rs = checkPlanPstmt.executeQuery();
@@ -312,11 +338,10 @@ public static void addPlan(Connection conn, Scanner sc) {
         int adminPriority = sc.nextInt();
         sc.nextLine(); // Consume newline
 
-        System.out.println("Please enter the new floor plan details: ");
-        String newPlanDetails = sc.nextLine();
-
         // Check if there are any rooms occupied on this floor
-        String checkOccupiedSql = "SELECT COUNT(*) FROM rooms r JOIN bookings b ON r.id = b.room_id WHERE r.floor_number = ?";
+        String checkOccupiedSql = "SELECT COUNT(*) FROM rooms r " +
+                                   "JOIN bookings b ON r.id = b.room_id " +
+                                   "WHERE r.floor_id = (SELECT id FROM floors WHERE floor_number = ?)";
         PreparedStatement checkOccupiedPstmt = conn.prepareStatement(checkOccupiedSql);
         checkOccupiedPstmt.setInt(1, floorNumber);
         ResultSet occupiedRs = checkOccupiedPstmt.executeQuery();
@@ -324,16 +349,29 @@ public static void addPlan(Connection conn, Scanner sc) {
 
         int occupiedCount = occupiedRs.getInt(1);
 
+        // Prompt for new floor plan details
+        System.out.print("Enter the number of rooms for this floor: ");
+        int numberOfRooms = sc.nextInt();
+        sc.nextLine(); // Consume newline
+
+        // Collect details for each room
+        List<String> roomDetails = new ArrayList<>();
+        for (int i = 0; i < numberOfRooms; i++) {
+            System.out.print("Enter details for room " + (i + 1) + " (name and capacity separated by a comma): ");
+            String roomDetail = sc.nextLine();
+            roomDetails.add(roomDetail);
+        }
+
+        // If rooms are occupied, save version but do not update
         if (occupiedCount > 0) {
-            // If rooms are occupied, save version but do not update
             System.out.println("Some rooms are occupied. Cannot update the plan but will store the version.");
             
             // Insert the current plan into the version history
-            String insertVersionSql = "INSERT INTO floor_plan_versions (floor_number, plan_details, finalised_by, priority) "
-                    + "VALUES (?, ?, ?, ?)";
+            String insertVersionSql = "INSERT INTO floor_plan_versions (floor_plan_id, previous_plan_details, finalised_by, priority) " +
+                                       "VALUES (?, ?, ?, ?)";
             PreparedStatement insertVersionPstmt = conn.prepareStatement(insertVersionSql);
-            insertVersionPstmt.setInt(1, floorNumber);
-            insertVersionPstmt.setString(2, newPlanDetails);
+            insertVersionPstmt.setInt(1, rs.getInt("id")); // Use the existing plan's ID
+            insertVersionPstmt.setString(2, String.join(";", roomDetails)); // Store room details
             insertVersionPstmt.setString(3, adminName);
             insertVersionPstmt.setInt(4, adminPriority);
             insertVersionPstmt.executeUpdate();
@@ -343,15 +381,15 @@ public static void addPlan(Connection conn, Scanner sc) {
         }
 
         // Check if the new admin can update the plan
-        if (adminPriority >= currentPriority) {
+        if (adminPriority < currentPriority) {
             System.out.println("You cannot update the plan because your priority is too low.");
             
             // Store the version but do not update the final plan
-            String insertVersionSql = "INSERT INTO floor_plan_versions (floor_number, plan_details, finalised_by, priority) "
-                    + "VALUES (?, ?, ?, ?)";
+            String insertVersionSql = "INSERT INTO floor_plan_versions (floor_plan_id, previous_plan_details, finalised_by, priority) " +
+                                       "VALUES (?, ?, ?, ?)";
             PreparedStatement insertVersionPstmt = conn.prepareStatement(insertVersionSql);
-            insertVersionPstmt.setInt(1, floorNumber);
-            insertVersionPstmt.setString(2, newPlanDetails);
+            insertVersionPstmt.setInt(1, rs.getInt("id")); // Use the existing plan's ID
+            insertVersionPstmt.setString(2, String.join(";", roomDetails)); // Store room details
             insertVersionPstmt.setString(3, adminName);
             insertVersionPstmt.setInt(4, adminPriority);
             insertVersionPstmt.executeUpdate();
@@ -359,21 +397,66 @@ public static void addPlan(Connection conn, Scanner sc) {
             System.out.println("Version stored successfully.");
         } else {
             // Update the plan since admin has a higher priority
-            String updatePlanSql = "UPDATE floor_plans SET plan_details = ?, finalised_by = ?, priority = ?, last_updated = CURRENT_TIMESTAMP "
-                    + "WHERE floor_number = ?";
+            String updatePlanSql = "UPDATE floor_plans SET plan_details = ?, finalised_by = ?, priority = ?, last_updated = CURRENT_TIMESTAMP " +
+                                   "WHERE id = ?";
             PreparedStatement updatePlanPstmt = conn.prepareStatement(updatePlanSql);
-            updatePlanPstmt.setString(1, newPlanDetails);
+            updatePlanPstmt.setString(1, String.join(";", roomDetails)); // Update with new room details
             updatePlanPstmt.setString(2, adminName);
             updatePlanPstmt.setInt(3, adminPriority);
-            updatePlanPstmt.setInt(4, floorNumber);
+            updatePlanPstmt.setInt(4, rs.getInt("id")); // Use the existing plan's ID
             updatePlanPstmt.executeUpdate();
 
             System.out.println("Plan updated successfully.");
+
+            // Now update the rooms table with new room details
+            int totalRoomsUpdated = 0; // Counter for updated room count
+            for (String roomDetail : roomDetails) {
+                String[] details = roomDetail.split(",");
+                String roomName = details[0].trim();
+                int capacity = Integer.parseInt(details[1].trim());
+
+                // Check if the room already exists
+                String checkRoomSql = "SELECT id FROM rooms WHERE room_name = ? AND floor_id = (SELECT id FROM floors WHERE floor_number = ?)";
+                PreparedStatement checkRoomPstmt = conn.prepareStatement(checkRoomSql);
+                checkRoomPstmt.setString(1, roomName);
+                checkRoomPstmt.setInt(2, floorNumber);
+                ResultSet roomRs = checkRoomPstmt.executeQuery();
+
+                if (roomRs.next()) {
+                    // Update existing room
+                    String updateRoomSql = "UPDATE rooms SET capacity = ? WHERE id = ?";
+                    PreparedStatement updateRoomPstmt = conn.prepareStatement(updateRoomSql);
+                    updateRoomPstmt.setInt(1, capacity);
+                    updateRoomPstmt.setInt(2, roomRs.getInt("id"));
+                    updateRoomPstmt.executeUpdate();
+                    System.out.println("Updated room: " + roomName);
+                } else {
+                    // Insert new room
+                    String insertRoomSql = "INSERT INTO rooms (floor_id, room_name, capacity) VALUES ((SELECT id FROM floors WHERE floor_number = ?), ?, ?)";
+                    PreparedStatement insertRoomPstmt = conn.prepareStatement(insertRoomSql);
+                    insertRoomPstmt.setInt(1, floorNumber);
+                    insertRoomPstmt.setString(2, roomName);
+                    insertRoomPstmt.setInt(3, capacity);
+                    insertRoomPstmt.executeUpdate();
+                    System.out.println("Added new room: " + roomName);
+                    totalRoomsUpdated++; // Increment the counter for new rooms added
+                }
+            }
+
+            // Update total_rooms in floors table
+            String updateTotalRoomsSql = "UPDATE floors SET total_rooms = total_rooms + ? WHERE floor_number = ?";
+            PreparedStatement updateTotalRoomsPstmt = conn.prepareStatement(updateTotalRoomsSql);
+            updateTotalRoomsPstmt.setInt(1, totalRoomsUpdated); // Update with the number of new rooms added
+            updateTotalRoomsPstmt.setInt(2, floorNumber);
+            updateTotalRoomsPstmt.executeUpdate();
+            System.out.println("Updated total rooms for floor " + floorNumber + " successfully.");
         }
     } catch (SQLException e) {
         e.printStackTrace();
     }
 }
+
+
 
 
     // User menu for additional functionalities
@@ -406,7 +489,7 @@ public static void addPlan(Connection conn, Scanner sc) {
     }
 
    // Method to view available rooms based on user-specified time range
-    public static void viewAvailableRooms(Connection conn, Scanner sc) {
+public static void viewAvailableRooms(Connection conn, Scanner sc) {
     try {
         System.out.print("Start Time (HH:MM): ");
         String startTime = sc.nextLine();
@@ -414,8 +497,12 @@ public static void addPlan(Connection conn, Scanner sc) {
         String endTime = sc.nextLine();
 
         // Query to find available rooms
-        String sql = "SELECT * FROM rooms WHERE available = true " +
-                     "AND id NOT IN (SELECT room_id FROM bookings WHERE (start_time < ? AND end_time > ?))";
+        String sql = "SELECT r.id, r.room_name, r.capacity, f.floor_number " +
+                     "FROM rooms r " +
+                     "JOIN floors f ON r.floor_id = f.id " +
+                     "WHERE r.available = true " +
+                     "AND r.id NOT IN (SELECT room_id FROM bookings WHERE (start_time < ? AND end_time > ?))";
+        
         PreparedStatement pstmt = conn.prepareStatement(sql);
         pstmt.setString(1, endTime);
         pstmt.setString(2, startTime);
@@ -441,8 +528,7 @@ public static void addPlan(Connection conn, Scanner sc) {
 }
 
 
-// Method to recommend a room based on user preferences
-public static void recommendRoom(Connection conn, Scanner sc) {
+    public static void recommendRoom(Connection conn, Scanner sc) {
     System.out.print("Start Time (HH:MM): ");
     String startTime = sc.nextLine();
     System.out.print("End Time (HH:MM): ");
@@ -450,8 +536,8 @@ public static void recommendRoom(Connection conn, Scanner sc) {
     System.out.print("Minimum Capacity: ");
     int minCapacity = sc.nextInt();
     sc.nextLine();  // Consume newline
-    System.out.print("Preferred Floor: ");
-    int preferredFloor = sc.nextInt();
+    System.out.print("Preferred Floor ID: "); // Changed to preferred floor ID
+    int preferredFloorId = sc.nextInt();
     sc.nextLine();  // Consume newline
 
     try {
@@ -459,7 +545,7 @@ public static void recommendRoom(Connection conn, Scanner sc) {
         String availabilitySql = "SELECT * FROM rooms WHERE id NOT IN " +
                                  "(SELECT room_id FROM bookings WHERE (start_time < ? AND end_time > ?)) " +
                                  "AND available = true";
-        
+
         PreparedStatement availabilityPstmt = conn.prepareStatement(availabilitySql);
         availabilityPstmt.setString(1, endTime);
         availabilityPstmt.setString(2, startTime);
@@ -498,10 +584,10 @@ public static void recommendRoom(Connection conn, Scanner sc) {
         if (capacityRoomIds.isEmpty()) {
             System.out.println("No rooms available with capacity greater than required.");
             // Step 5: Recommend rooms on the preferred floor with a capacity less than or equal to the required capacity
-            String recommendSql = "SELECT * FROM rooms WHERE floor_number = ? AND capacity <= ? AND id IN (" +
+            String recommendSql = "SELECT * FROM rooms WHERE floor_id = ? AND capacity <= ? AND id IN (" +
                                   availableRoomIds.stream().map(String::valueOf).collect(Collectors.joining(",")) + ")";
             PreparedStatement recommendPstmt = conn.prepareStatement(recommendSql);
-            recommendPstmt.setInt(1, preferredFloor);
+            recommendPstmt.setInt(1, preferredFloorId); // Use floor_id
             recommendPstmt.setInt(2, minCapacity);
 
             ResultSet recommendRs = recommendPstmt.executeQuery();
@@ -540,7 +626,7 @@ public static void recommendRoom(Connection conn, Scanner sc) {
                             String roomNameToBook = recommendedRoomNames.get(roomNumber - 1);
                             // Mark room as booked
                             bookRoom(conn, roomIdToBook, roomNameToBook, startTime, endTime);
-                            System.out.println("Room booked: " + roomNameToBook + " on floor " + preferredFloor);
+                            System.out.println("Room booked: " + roomNameToBook + " on floor ID " + preferredFloorId);
                         } else {
                             System.out.println("Invalid room number selected.");
                         }
@@ -557,10 +643,10 @@ public static void recommendRoom(Connection conn, Scanner sc) {
         // Step 5: Filter by preferred floor
         String preferredFloorSql = "SELECT * FROM rooms WHERE id IN (" +
                                     capacityRoomIds.stream().map(String::valueOf).collect(Collectors.joining(",")) + ") " +
-                                    "AND floor_number = ?";
-        
+                                    "AND floor_id = ?";
+
         PreparedStatement preferredFloorPstmt = conn.prepareStatement(preferredFloorSql);
-        preferredFloorPstmt.setInt(1, preferredFloor);
+        preferredFloorPstmt.setInt(1, preferredFloorId); // Use floor_id
 
         ResultSet preferredFloorRs = preferredFloorPstmt.executeQuery();
 
@@ -570,7 +656,7 @@ public static void recommendRoom(Connection conn, Scanner sc) {
             String roomName = preferredFloorRs.getString("room_name");
             // Mark room as booked
             bookRoom(conn, roomId, roomName, startTime, endTime);
-            System.out.println("Room recommended: " + roomName + " on floor " + preferredFloor);
+            System.out.println("Room recommended: " + roomName + " on floor ID " + preferredFloorId);
         } else {
             System.out.println("No rooms available on your preferred floor.");
 
@@ -580,9 +666,9 @@ public static void recommendRoom(Connection conn, Scanner sc) {
             // Check for rooms on lower floor
             String lowerFloorSql = "SELECT * FROM rooms WHERE id IN (" +
                                    capacityRoomIds.stream().map(String::valueOf).collect(Collectors.joining(",")) + ") " +
-                                   "AND floor_number = ?";
+                                   "AND floor_id = ?";
             PreparedStatement lowerFloorPstmt = conn.prepareStatement(lowerFloorSql);
-            lowerFloorPstmt.setInt(1, preferredFloor - 1);
+            lowerFloorPstmt.setInt(1, preferredFloorId - 1); // Use floor_id
             ResultSet lowerFloorRs = lowerFloorPstmt.executeQuery();
             while (lowerFloorRs.next()) {
                 nearbyFloorRoomIds.add(lowerFloorRs.getInt("id"));
@@ -591,9 +677,9 @@ public static void recommendRoom(Connection conn, Scanner sc) {
             // Check for rooms on upper floor
             String upperFloorSql = "SELECT * FROM rooms WHERE id IN (" +
                                    capacityRoomIds.stream().map(String::valueOf).collect(Collectors.joining(",")) + ") " +
-                                   "AND floor_number = ?";
+                                   "AND floor_id = ?";
             PreparedStatement upperFloorPstmt = conn.prepareStatement(upperFloorSql);
-            upperFloorPstmt.setInt(1, preferredFloor + 1);
+            upperFloorPstmt.setInt(1, preferredFloorId + 1); // Use floor_id
             ResultSet upperFloorRs = upperFloorPstmt.executeQuery();
             while (upperFloorRs.next()) {
                 nearbyFloorRoomIds.add(upperFloorRs.getInt("id"));
@@ -623,10 +709,6 @@ public static void recommendRoom(Connection conn, Scanner sc) {
 }
 
 
-
-
-
-    // Method to book a room
     public static void bookRoom(Connection conn, int roomId, String roomName, String startTime, String endTime) {
         try {
             // Insert booking into the bookings table
@@ -643,7 +725,7 @@ public static void recommendRoom(Connection conn, Scanner sc) {
             updatePstmt.setInt(1, roomId);
             updatePstmt.executeUpdate();
 
-            System.out.println("Room '" + roomName + "' booked from " + startTime + " to " + endTime + ".");
+            System.out.println("Successfully booked room: " + roomName);
         } catch (SQLException e) {
             e.printStackTrace();
         }
