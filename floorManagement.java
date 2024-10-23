@@ -290,24 +290,54 @@ public static void recommendRoom(Connection conn, Scanner sc) {
             System.out.println("No rooms available with capacity greater than required.");
             // Step 5: Recommend rooms on the preferred floor with a capacity less than or equal to the required capacity
             String recommendSql = "SELECT * FROM rooms WHERE floor_number = ? AND capacity <= ? AND id IN (" +
-                                  availableRoomIds.stream().map(String::valueOf).collect(Collectors.joining(",")) + ") LIMIT 2";
+                                  availableRoomIds.stream().map(String::valueOf).collect(Collectors.joining(",")) + ")";
             PreparedStatement recommendPstmt = conn.prepareStatement(recommendSql);
             recommendPstmt.setInt(1, preferredFloor);
             recommendPstmt.setInt(2, minCapacity);
 
             ResultSet recommendRs = recommendPstmt.executeQuery();
 
-            List<String> recommendedRooms = new ArrayList<>();
+            List<Integer> recommendedRoomIds = new ArrayList<>();
+            List<String> recommendedRoomNames = new ArrayList<>();
+            int count = 1;
+
             while (recommendRs.next()) {
                 int roomId = recommendRs.getInt("id");
                 String roomName = recommendRs.getString("room_name");
-                recommendedRooms.add(roomName);
+                recommendedRoomIds.add(roomId);
+                recommendedRoomNames.add(roomName);
+                System.out.println(count + ". " + roomName + " (Capacity: " + recommendRs.getInt("capacity") + ")");
+                count++;
             }
 
-            if (!recommendedRooms.isEmpty()) {
-                System.out.println("Recommended rooms with capacity less than or equal to the required capacity on your preferred floor:");
-                for (String roomName : recommendedRooms) {
-                    System.out.println("- " + roomName);
+            if (!recommendedRoomIds.isEmpty()) {
+                System.out.print("Would you like to book one of these rooms? (yes/no): ");
+                String choice = sc.nextLine();
+
+                if (choice.equalsIgnoreCase("yes")) {
+                    System.out.print("Please enter the number of the room you wish to book (or type 'exit' to exit): ");
+                    String roomInput = sc.nextLine();
+
+                    // Check if the user wants to exit
+                    if (roomInput.equalsIgnoreCase("exit")) {
+                        System.out.println("Exiting without booking.");
+                        return; // Exit without booking
+                    }
+
+                    try {
+                        int roomNumber = Integer.parseInt(roomInput);
+                        if (roomNumber > 0 && roomNumber <= recommendedRoomIds.size()) {
+                            int roomIdToBook = recommendedRoomIds.get(roomNumber - 1);
+                            String roomNameToBook = recommendedRoomNames.get(roomNumber - 1);
+                            // Mark room as booked
+                            bookRoom(conn, roomIdToBook, roomNameToBook, startTime, endTime);
+                            System.out.println("Room booked: " + roomNameToBook + " on floor " + preferredFloor);
+                        } else {
+                            System.out.println("Invalid room number selected.");
+                        }
+                    } catch (NumberFormatException e) {
+                        System.out.println("Invalid input. Please enter a valid room number.");
+                    }
                 }
             } else {
                 System.out.println("No rooms available on your preferred floor with the required capacity.");
@@ -382,6 +412,7 @@ public static void recommendRoom(Connection conn, Scanner sc) {
         e.printStackTrace();
     }
 }
+
 
 
 
