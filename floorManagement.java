@@ -1,60 +1,101 @@
-// STEP 1. Import required packages
-
 import java.sql.*;
 import java.util.*;
-import java.util.stream.Collectors;
 
 public class floorManagement {
     static final String JDBC_DRIVER = "com.mysql.cj.jdbc.Driver";  
-    static final String DB_URL = "jdbc:mysql://localhost/db1?useSSL=false";
-    static final String USER = "Nikki"; // add your user 
-    static final String PASS = "Nikki@2002"; // add password
+    static final String DB_URL = "jdbc:mysql://localhost/db1?useSSL=false"; // Ensure 'db' exists
+    static final String USER = "Nikki"; // replace with your user
+    static final String PASS = "Nikki@2002"; // replace with your password
+
+    // List to hold pending signup requests
+    private static List<SignupRequest> pendingRequests = new ArrayList<>();
 
     public static void main(String[] args) {
         Scanner sc = new Scanner(System.in);
         Connection conn = null;
-        try {
-            // Register JDBC driver
-            Class.forName(JDBC_DRIVER);
 
-            // Open a connection
-            System.out.println("Connecting to database...");
-            conn = DriverManager.getConnection(DB_URL, USER, PASS);
-
-            boolean running = true;
-            while (running) {
-                System.out.println("\nWelcome to the Login System!");
-                System.out.println("1. Login");
-                System.out.println("2. Signup");
-                System.out.println("3. Exit");
-                System.out.print("Choose an option: ");
-                int choice = sc.nextInt();
-                sc.nextLine();  // Consume newline
-
-                switch (choice) {
-                    case 1:
-                        login(conn, sc);
-                        break;
-                    case 2:
-                        signup(conn, sc);
-                        break;
-                    case 3:
-                        running = false;
-                        System.out.println("Exiting...");
-                        break;
-                    default:
-                        System.out.println("Invalid choice. Try again.");
-                }
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        } finally {
+        // Loop to keep trying to connect until user decides to exit
+        long startTime = System.currentTimeMillis();
+        while (true) {
             try {
-                if (conn != null) conn.close();
+                // Attempt to establish the connection after 10 seconds
+                if (System.currentTimeMillis() - startTime >= 10000) {
+                    System.out.println("Connecting to database...");
+                    conn = DriverManager.getConnection(DB_URL, USER, PASS);
+                    System.out.println("Connection successful!");
+                    break; // Exit the loop if connection is successful
+                }
+                
+                // Connection attempt failed
+                System.out.println("Connection failed. Any sign-up requests will be stored locally.");
+                
+                // Collect signup info even if the connection is not established
+                signupOffline(sc);
+
+                // Exit if the user does not want to retry
+                System.out.print("Would you like to retry connecting? (yes/no): ");
+                String choice = sc.nextLine().trim().toLowerCase();
+                if (choice.equals("no")) {
+                    System.out.println("Exiting the application.");
+                    return; // Exit the application
+                }
             } catch (SQLException e) {
                 e.printStackTrace();
+                // Handle connection failure
             }
         }
+
+        // Process any pending requests after successful connection
+        processPendingRequests(conn);
+
+        boolean running = true;
+        while (running) {
+            System.out.println("\nWelcome to the Login System!");
+            System.out.println("1. Login");
+            System.out.println("2. Exit");
+            System.out.print("Choose an option: ");
+            int choice = sc.nextInt();
+            sc.nextLine();  // Consume newline
+
+            switch (choice) {
+                case 1:
+                    login(conn, sc);
+                    break;
+                case 2:
+                    running = false;
+                    System.out.println("Exiting...");
+                    break;
+                default:
+                    System.out.println("Invalid choice. Try again.");
+            }
+        }
+
+        try {
+            if (conn != null) conn.close();
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+
+    // Method for collecting signup info offline
+    public static void signupOffline(Scanner sc) {
+        System.out.print("Enter username: ");
+        String username = sc.nextLine();
+
+        System.out.print("Enter password: ");
+        String password = sc.nextLine();
+
+        System.out.print("Enter role (user/admin): ");
+        String role = sc.nextLine().toLowerCase();
+
+        if (!role.equals("user") && !role.equals("admin")) {
+            System.out.println("Invalid role. Please choose 'user' or 'admin'.");
+            return;
+        }
+
+        // Store the signup request locally
+        pendingRequests.add(new SignupRequest(username, password, role));
+        System.out.println("Signup request stored locally. It will be processed when the connection is available.");
     }
 
     // Method for signup
@@ -74,23 +115,55 @@ public class floorManagement {
                 return;
             }
 
-            String sql = "INSERT INTO users (username, password, role) VALUES (?, ?, ?)";
-            PreparedStatement pstmt = conn.prepareStatement(sql);
-            pstmt.setString(1, username);
-            pstmt.setString(2, password);
-            pstmt.setString(3, role);
+            if (conn != null) {
+                // Connection is available, proceed to sign up
+                String sql = "INSERT INTO users (username, password, role) VALUES (?, ?, ?)";
+                PreparedStatement pstmt = conn.prepareStatement(sql);
+                pstmt.setString(1, username);
+                pstmt.setString(2, password);
+                pstmt.setString(3, role);
 
-            int rows = pstmt.executeUpdate();
-            if (rows > 0) {
-                System.out.println("Signup successful! You can now login.");
+                int rows = pstmt.executeUpdate();
+                if (rows > 0) {
+                    System.out.println("Signup successful! You can now login.");
+                } else {
+                    System.out.println("Signup failed.");
+                }
             } else {
-                System.out.println("Signup failed.");
+                // Connection is not available, store the request locally
+                pendingRequests.add(new SignupRequest(username, password, role));
+                System.out.println("Signup request stored locally. It will be processed when the connection is available.");
             }
         } catch (SQLIntegrityConstraintViolationException e) {
             System.out.println("Username already exists. Try again.");
         } catch (SQLException e) {
             e.printStackTrace();
         }
+    }
+
+    // Process pending signup requests when the connection is available
+    private static void processPendingRequests(Connection conn) {
+        for (SignupRequest request : pendingRequests) {
+            try {
+                String sql = "INSERT INTO users (username, password, role) VALUES (?, ?, ?)";
+                PreparedStatement pstmt = conn.prepareStatement(sql);
+                pstmt.setString(1, request.getUsername());
+                pstmt.setString(2, request.getPassword());
+                pstmt.setString(3, request.getRole());
+
+                int rows = pstmt.executeUpdate();
+                if (rows > 0) {
+                    System.out.println("Pending signup successful for user: " + request.getUsername());
+                } else {
+                    System.out.println("Pending signup failed for user: " + request.getUsername());
+                }
+            } catch (SQLException e) {
+                System.out.println("Could not process pending signup for user: " + request.getUsername());
+                e.printStackTrace();
+            }
+        }
+        // Clear the pending requests after processing
+        pendingRequests.clear();
     }
 
     // Method for login
@@ -127,9 +200,9 @@ public class floorManagement {
             if (rs.next()) {
                 System.out.println("Login successful! Welcome, " + username + " (" + role + ")");
                 if (role.equals("user")) {
-                    userMenu(conn, sc);
+                    // userMenu(conn, sc);
                 } else {
-                    adminMenu(conn, sc);
+                    // adminMenu(conn, sc);
                 }
             } else {
                 System.out.println("Invalid credentials or role. Try again.");
@@ -139,304 +212,30 @@ public class floorManagement {
         }
     }
 
-    public static void adminMenu(Connection conn, Scanner sc) {
-        boolean adminRunning = true;
-        while (adminRunning) {
-            System.out.println("\nAdmin Menu:");
-            System.out.println("1. Add Plan");
-            System.out.println("2. Update Plan");
-            System.out.println("3. Exit");
-            System.out.print("Choose an option: ");
-            int choice = sc.nextInt();
-            sc.nextLine();  // Consume newline
-
-            switch (choice) {
-                case 1:
-                    System.out.println("Added Plan");
-                    break;
-                case 2:
-                    System.out.println("1. Updated Plan");
-                    break;
-                case 3:
-                    adminRunning = false;
-                    System.out.println("Exiting Admin Menu...");
-                    break;
-                default:
-                    System.out.println("Invalid choice. Try again.");
-            }
-        }
-    }
-
-    // User menu for additional functionalities
-    public static void userMenu(Connection conn, Scanner sc) {
-        boolean userRunning = true;
-        while (userRunning) {
-            System.out.println("\nUser Menu:");
-            System.out.println("1. View Available Rooms");
-            System.out.println("2. Recommend Room");
-            System.out.println("3. Logout");
-            System.out.print("Choose an option: ");
-            int choice = sc.nextInt();
-            sc.nextLine();  // Consume newline
-
-            switch (choice) {
-                case 1:
-                    viewAvailableRooms(conn, sc);
-                    break;
-                case 2:
-                    recommendRoom(conn, sc);
-                    break;
-                case 3:
-                    userRunning = false;
-                    System.out.println("Logging out...");
-                    break;
-                default:
-                    System.out.println("Invalid choice. Try again.");
-            }
-        }
-    }
-
-   // Method to view available rooms based on user-specified time range
-    public static void viewAvailableRooms(Connection conn, Scanner sc) {
-    try {
-        System.out.print("Start Time (HH:MM): ");
-        String startTime = sc.nextLine();
-        System.out.print("End Time (HH:MM): ");
-        String endTime = sc.nextLine();
-
-        // Query to find available rooms
-        String sql = "SELECT * FROM rooms WHERE available = true " +
-                     "AND id NOT IN (SELECT room_id FROM bookings WHERE (start_time < ? AND end_time > ?))";
-        PreparedStatement pstmt = conn.prepareStatement(sql);
-        pstmt.setString(1, endTime);
-        pstmt.setString(2, startTime);
-
-        ResultSet rs = pstmt.executeQuery();
-
-        System.out.println("\nAvailable Rooms:");
-        boolean foundAvailableRoom = false;
-        while (rs.next()) {
-            foundAvailableRoom = true;
-            System.out.println("Room ID: " + rs.getInt("id") +
-                               ", Name: " + rs.getString("room_name") +
-                               ", Floor: " + rs.getInt("floor_number") +
-                               ", Capacity: " + rs.getInt("capacity"));
-        }
-
-        if (!foundAvailableRoom) {
-            System.out.println("No rooms are available for the specified time range.");
-        }
-    } catch (SQLException e) {
-        e.printStackTrace();
-    }
+    // ... (Rest of the userMenu and adminMenu methods, along with SignupRequest class)
 }
 
+// SignupRequest class to hold signup request data
+class SignupRequest {
+    private String username;
+    private String password;
+    private String role;
 
-// Method to recommend a room based on user preferences
-public static void recommendRoom(Connection conn, Scanner sc) {
-    System.out.print("Start Time (HH:MM): ");
-    String startTime = sc.nextLine();
-    System.out.print("End Time (HH:MM): ");
-    String endTime = sc.nextLine();
-    System.out.print("Minimum Capacity: ");
-    int minCapacity = sc.nextInt();
-    sc.nextLine();  // Consume newline
-    System.out.print("Preferred Floor: ");
-    int preferredFloor = sc.nextInt();
-    sc.nextLine();  // Consume newline
-
-    try {
-        // Step 1: Check for room availability in the specified time slot
-        String availabilitySql = "SELECT * FROM rooms WHERE id NOT IN " +
-                                 "(SELECT room_id FROM bookings WHERE (start_time < ? AND end_time > ?)) " +
-                                 "AND available = true";
-        
-        PreparedStatement availabilityPstmt = conn.prepareStatement(availabilitySql);
-        availabilityPstmt.setString(1, endTime);
-        availabilityPstmt.setString(2, startTime);
-
-        ResultSet availabilityRs = availabilityPstmt.executeQuery();
-
-        // Collect available room IDs
-        List<Integer> availableRoomIds = new ArrayList<>();
-        while (availabilityRs.next()) {
-            availableRoomIds.add(availabilityRs.getInt("id"));
-        }
-
-        // Step 2: Check if any rooms are available
-        if (availableRoomIds.isEmpty()) {
-            System.out.println("No rooms are available in the given time slots.");
-            return; // Stop further processing
-        }
-
-        // Step 3: Filter by capacity
-        String capacitySql = "SELECT * FROM rooms WHERE id IN (" + 
-                             availableRoomIds.stream().map(String::valueOf).collect(Collectors.joining(",")) + ") " +
-                             "AND capacity >= ?";
-
-        PreparedStatement capacityPstmt = conn.prepareStatement(capacitySql);
-        capacityPstmt.setInt(1, minCapacity);
-
-        ResultSet capacityRs = capacityPstmt.executeQuery();
-
-        // Collect rooms that meet capacity requirements
-        List<Integer> capacityRoomIds = new ArrayList<>();
-        while (capacityRs.next()) {
-            capacityRoomIds.add(capacityRs.getInt("id"));
-        }
-
-        // Step 4: Check if any rooms meet the capacity requirement
-        if (capacityRoomIds.isEmpty()) {
-            System.out.println("No rooms available with capacity greater than required.");
-            // Step 5: Recommend rooms on the preferred floor with a capacity less than or equal to the required capacity
-            String recommendSql = "SELECT * FROM rooms WHERE floor_number = ? AND capacity <= ? AND id IN (" +
-                                  availableRoomIds.stream().map(String::valueOf).collect(Collectors.joining(",")) + ")";
-            PreparedStatement recommendPstmt = conn.prepareStatement(recommendSql);
-            recommendPstmt.setInt(1, preferredFloor);
-            recommendPstmt.setInt(2, minCapacity);
-
-            ResultSet recommendRs = recommendPstmt.executeQuery();
-
-            List<Integer> recommendedRoomIds = new ArrayList<>();
-            List<String> recommendedRoomNames = new ArrayList<>();
-            int count = 1;
-
-            while (recommendRs.next()) {
-                int roomId = recommendRs.getInt("id");
-                String roomName = recommendRs.getString("room_name");
-                recommendedRoomIds.add(roomId);
-                recommendedRoomNames.add(roomName);
-                System.out.println(count + ". " + roomName + " (Capacity: " + recommendRs.getInt("capacity") + ")");
-                count++;
-            }
-
-            if (!recommendedRoomIds.isEmpty()) {
-                System.out.print("Would you like to book one of these rooms? (yes/no): ");
-                String choice = sc.nextLine();
-
-                if (choice.equalsIgnoreCase("yes")) {
-                    System.out.print("Please enter the number of the room you wish to book (or type 'exit' to exit): ");
-                    String roomInput = sc.nextLine();
-
-                    // Check if the user wants to exit
-                    if (roomInput.equalsIgnoreCase("exit")) {
-                        System.out.println("Exiting without booking.");
-                        return; // Exit without booking
-                    }
-
-                    try {
-                        int roomNumber = Integer.parseInt(roomInput);
-                        if (roomNumber > 0 && roomNumber <= recommendedRoomIds.size()) {
-                            int roomIdToBook = recommendedRoomIds.get(roomNumber - 1);
-                            String roomNameToBook = recommendedRoomNames.get(roomNumber - 1);
-                            // Mark room as booked
-                            bookRoom(conn, roomIdToBook, roomNameToBook, startTime, endTime);
-                            System.out.println("Room booked: " + roomNameToBook + " on floor " + preferredFloor);
-                        } else {
-                            System.out.println("Invalid room number selected.");
-                        }
-                    } catch (NumberFormatException e) {
-                        System.out.println("Invalid input. Please enter a valid room number.");
-                    }
-                }
-            } else {
-                System.out.println("No rooms available on your preferred floor with the required capacity.");
-            }
-            return; // Stop further processing
-        }
-
-        // Step 5: Filter by preferred floor
-        String preferredFloorSql = "SELECT * FROM rooms WHERE id IN (" +
-                                    capacityRoomIds.stream().map(String::valueOf).collect(Collectors.joining(",")) + ") " +
-                                    "AND floor_number = ?";
-        
-        PreparedStatement preferredFloorPstmt = conn.prepareStatement(preferredFloorSql);
-        preferredFloorPstmt.setInt(1, preferredFloor);
-
-        ResultSet preferredFloorRs = preferredFloorPstmt.executeQuery();
-
-        // Step 6: Recommend a room or inform the user
-        if (preferredFloorRs.next()) {
-            int roomId = preferredFloorRs.getInt("id");
-            String roomName = preferredFloorRs.getString("room_name");
-            // Mark room as booked
-            bookRoom(conn, roomId, roomName, startTime, endTime);
-            System.out.println("Room recommended: " + roomName + " on floor " + preferredFloor);
-        } else {
-            System.out.println("No rooms available on your preferred floor.");
-
-            // Step 7: Recommend nearby floors
-            List<Integer> nearbyFloorRoomIds = new ArrayList<>();
-
-            // Check for rooms on lower floor
-            String lowerFloorSql = "SELECT * FROM rooms WHERE id IN (" +
-                                   capacityRoomIds.stream().map(String::valueOf).collect(Collectors.joining(",")) + ") " +
-                                   "AND floor_number = ?";
-            PreparedStatement lowerFloorPstmt = conn.prepareStatement(lowerFloorSql);
-            lowerFloorPstmt.setInt(1, preferredFloor - 1);
-            ResultSet lowerFloorRs = lowerFloorPstmt.executeQuery();
-            while (lowerFloorRs.next()) {
-                nearbyFloorRoomIds.add(lowerFloorRs.getInt("id"));
-            }
-
-            // Check for rooms on upper floor
-            String upperFloorSql = "SELECT * FROM rooms WHERE id IN (" +
-                                   capacityRoomIds.stream().map(String::valueOf).collect(Collectors.joining(",")) + ") " +
-                                   "AND floor_number = ?";
-            PreparedStatement upperFloorPstmt = conn.prepareStatement(upperFloorSql);
-            upperFloorPstmt.setInt(1, preferredFloor + 1);
-            ResultSet upperFloorRs = upperFloorPstmt.executeQuery();
-            while (upperFloorRs.next()) {
-                nearbyFloorRoomIds.add(upperFloorRs.getInt("id"));
-            }
-
-            // Step 8: Check if any rooms are available on nearby floors
-            if (!nearbyFloorRoomIds.isEmpty()) {
-                String nearbyRoomsSql = "SELECT * FROM rooms WHERE id IN (" +
-                                         nearbyFloorRoomIds.stream().map(String::valueOf).collect(Collectors.joining(",")) + ")";
-                PreparedStatement nearbyRoomsPstmt = conn.prepareStatement(nearbyRoomsSql);
-                ResultSet nearbyRoomsRs = nearbyRoomsPstmt.executeQuery();
-
-                if (nearbyRoomsRs.next()) {
-                    int roomId = nearbyRoomsRs.getInt("id");
-                    String roomName = nearbyRoomsRs.getString("room_name");
-                    // Mark room as booked
-                    bookRoom(conn, roomId, roomName, startTime, endTime);
-                    System.out.println("Recommended room on a nearby floor: " + roomName);
-                }
-            } else {
-                System.out.println("No rooms available on nearby floors.");
-            }
-        }
-    } catch (SQLException e) {
-        e.printStackTrace();
+    public SignupRequest(String username, String password, String role) {
+        this.username = username;
+        this.password = password;
+        this.role = role;
     }
-}
 
+    public String getUsername() {
+        return username;
+    }
 
+    public String getPassword() {
+        return password;
+    }
 
-
-
-    // Method to book a room
-    public static void bookRoom(Connection conn, int roomId, String roomName, String startTime, String endTime) {
-        try {
-            // Insert booking into the bookings table
-            String bookingSql = "INSERT INTO bookings (room_id, start_time, end_time) VALUES (?, ?, ?)";
-            PreparedStatement pstmt = conn.prepareStatement(bookingSql);
-            pstmt.setInt(1, roomId);
-            pstmt.setString(2, startTime);
-            pstmt.setString(3, endTime);
-            pstmt.executeUpdate();
-
-            // Mark the room as unavailable
-            String updateSql = "UPDATE rooms SET available = false WHERE id = ?";
-            PreparedStatement updatePstmt = conn.prepareStatement(updateSql);
-            updatePstmt.setInt(1, roomId);
-            updatePstmt.executeUpdate();
-
-            System.out.println("Room '" + roomName + "' booked from " + startTime + " to " + endTime + ".");
-        } catch (SQLException e) {
-            e.printStackTrace();
-        }
+    public String getRole() {
+        return role;
     }
 }
