@@ -232,7 +232,7 @@ public class floorManagement {
 }
 
 
-    // Method to recommend a room based on user preferences
+// Method to recommend a room based on user preferences
 public static void recommendRoom(Connection conn, Scanner sc) {
     System.out.print("Start Time (HH:MM): ");
     String startTime = sc.nextLine();
@@ -288,6 +288,30 @@ public static void recommendRoom(Connection conn, Scanner sc) {
         // Step 4: Check if any rooms meet the capacity requirement
         if (capacityRoomIds.isEmpty()) {
             System.out.println("No rooms available with capacity greater than required.");
+            // Step 5: Recommend rooms on the preferred floor with a capacity less than or equal to the required capacity
+            String recommendSql = "SELECT * FROM rooms WHERE floor_number = ? AND capacity <= ? AND id IN (" +
+                                  availableRoomIds.stream().map(String::valueOf).collect(Collectors.joining(",")) + ") LIMIT 2";
+            PreparedStatement recommendPstmt = conn.prepareStatement(recommendSql);
+            recommendPstmt.setInt(1, preferredFloor);
+            recommendPstmt.setInt(2, minCapacity);
+
+            ResultSet recommendRs = recommendPstmt.executeQuery();
+
+            List<String> recommendedRooms = new ArrayList<>();
+            while (recommendRs.next()) {
+                int roomId = recommendRs.getInt("id");
+                String roomName = recommendRs.getString("room_name");
+                recommendedRooms.add(roomName);
+            }
+
+            if (!recommendedRooms.isEmpty()) {
+                System.out.println("Recommended rooms with capacity less than or equal to the required capacity on your preferred floor:");
+                for (String roomName : recommendedRooms) {
+                    System.out.println("- " + roomName);
+                }
+            } else {
+                System.out.println("No rooms available on your preferred floor with the required capacity.");
+            }
             return; // Stop further processing
         }
 
@@ -312,22 +336,44 @@ public static void recommendRoom(Connection conn, Scanner sc) {
             System.out.println("No rooms available on your preferred floor.");
 
             // Step 7: Recommend nearby floors
-            String nearbyFloorSql = "SELECT * FROM rooms WHERE id IN (" +
-                                     capacityRoomIds.stream().map(String::valueOf).collect(Collectors.joining(",")) + ") " +
-                                     "AND floor_number <> ?";
+            List<Integer> nearbyFloorRoomIds = new ArrayList<>();
 
-            PreparedStatement nearbyFloorPstmt = conn.prepareStatement(nearbyFloorSql);
-            nearbyFloorPstmt.setInt(1, preferredFloor);
+            // Check for rooms on lower floor
+            String lowerFloorSql = "SELECT * FROM rooms WHERE id IN (" +
+                                   capacityRoomIds.stream().map(String::valueOf).collect(Collectors.joining(",")) + ") " +
+                                   "AND floor_number = ?";
+            PreparedStatement lowerFloorPstmt = conn.prepareStatement(lowerFloorSql);
+            lowerFloorPstmt.setInt(1, preferredFloor - 1);
+            ResultSet lowerFloorRs = lowerFloorPstmt.executeQuery();
+            while (lowerFloorRs.next()) {
+                nearbyFloorRoomIds.add(lowerFloorRs.getInt("id"));
+            }
 
-            ResultSet nearbyFloorRs = nearbyFloorPstmt.executeQuery();
+            // Check for rooms on upper floor
+            String upperFloorSql = "SELECT * FROM rooms WHERE id IN (" +
+                                   capacityRoomIds.stream().map(String::valueOf).collect(Collectors.joining(",")) + ") " +
+                                   "AND floor_number = ?";
+            PreparedStatement upperFloorPstmt = conn.prepareStatement(upperFloorSql);
+            upperFloorPstmt.setInt(1, preferredFloor + 1);
+            ResultSet upperFloorRs = upperFloorPstmt.executeQuery();
+            while (upperFloorRs.next()) {
+                nearbyFloorRoomIds.add(upperFloorRs.getInt("id"));
+            }
 
-            // Check if any nearby floor rooms are available
-            if (nearbyFloorRs.next()) {
-                int roomId = nearbyFloorRs.getInt("id");
-                String roomName = nearbyFloorRs.getString("room_name");
-                // Mark room as booked
-                bookRoom(conn, roomId, roomName, startTime, endTime);
-                System.out.println("Recommended room on a nearby floor: " + roomName);
+            // Step 8: Check if any rooms are available on nearby floors
+            if (!nearbyFloorRoomIds.isEmpty()) {
+                String nearbyRoomsSql = "SELECT * FROM rooms WHERE id IN (" +
+                                         nearbyFloorRoomIds.stream().map(String::valueOf).collect(Collectors.joining(",")) + ")";
+                PreparedStatement nearbyRoomsPstmt = conn.prepareStatement(nearbyRoomsSql);
+                ResultSet nearbyRoomsRs = nearbyRoomsPstmt.executeQuery();
+
+                if (nearbyRoomsRs.next()) {
+                    int roomId = nearbyRoomsRs.getInt("id");
+                    String roomName = nearbyRoomsRs.getString("room_name");
+                    // Mark room as booked
+                    bookRoom(conn, roomId, roomName, startTime, endTime);
+                    System.out.println("Recommended room on a nearby floor: " + roomName);
+                }
             } else {
                 System.out.println("No rooms available on nearby floors.");
             }
@@ -336,6 +382,7 @@ public static void recommendRoom(Connection conn, Scanner sc) {
         e.printStackTrace();
     }
 }
+
 
 
 
