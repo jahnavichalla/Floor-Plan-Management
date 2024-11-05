@@ -146,16 +146,21 @@ public class AdminService {
                     System.out.println("[SUCCESS] Room " + room.getRoomName() + " added successfully.");
                 }
 
-                // Prepare plan details for versions
-                String planDetails = "Floor " + floorNumber + " plan finalized by " + adminName;
+            StringBuilder roomDetailsBuilder = new StringBuilder();
+            for (Room room : rooms) {
+                roomDetailsBuilder.append(room.getRoomName()).append(",").append(room.getCapacity()).append(";");
+            }
+            String formattedRoomDetails = roomDetailsBuilder.toString();
 
-                // Insert into "floor_plan_versions" table
-                String insertVersionSql = "INSERT INTO floor_plan_versions (floor_plan_id, previous_plan_details, finalised_by, priority) VALUES (?, ?, ?, ?)";
+            // Insert into floor_plan_versions table
+            String insertVersionSql = "INSERT INTO floor_plan_versions (floor_plan_id,finalised_by, priority,number_of_rooms, room_details) " +
+                        "VALUES (?, ?, ?, ?, ?)";
                 PreparedStatement insertVersionPstmt = conn.prepareStatement(insertVersionSql);
-                insertVersionPstmt.setInt(1, floorPlanId);
-                insertVersionPstmt.setString(2, planDetails);
-                insertVersionPstmt.setString(3, adminName);
-                insertVersionPstmt.setInt(4, priority);
+                insertVersionPstmt.setInt(1, floorPlanId); // Use the existing plan's ID
+                insertVersionPstmt.setString(2, loggedInAdminUsername);
+                insertVersionPstmt.setInt(3, loggedInAdminPriority);
+                insertVersionPstmt.setInt(4, rooms.size()); // Number of rooms
+                insertVersionPstmt.setString(5, formattedRoomDetails); // Room details as a single string
                 insertVersionPstmt.executeUpdate();
 
                 System.out.println("\n[SUCCESS] Floor plan added successfully for floor " + floorNumber + " and finalized.\n");
@@ -237,19 +242,26 @@ public class AdminService {
                 roomDetails.add(roomDetail);
             }
 
+            StringBuilder roomDetailsBuilder = new StringBuilder();
+            for (String detail : roomDetails) {
+                roomDetailsBuilder.append(detail).append(";");
+            }
+            String formattedRoomDetails = roomDetailsBuilder.toString();
+
             // If rooms are occupied, save version but do not update
             if (occupiedCount > 0) {
                 System.out.println("\n[ERROR] Some rooms are currently occupied.");
                 System.out.println("Unable to update the plan, but the version will be saved.\n");
 
                 // Insert the current plan into the version history
-                String insertVersionSql = "INSERT INTO floor_plan_versions (floor_plan_id, previous_plan_details, finalised_by, priority) " +
-                        "VALUES (?, ?, ?, ?)";
+                String insertVersionSql = "INSERT INTO floor_plan_versions (floor_plan_id,finalised_by, priority,number_of_rooms, room_details) " +
+                        "VALUES (?, ?, ?, ?, ?)";
                 PreparedStatement insertVersionPstmt = conn.prepareStatement(insertVersionSql);
                 insertVersionPstmt.setInt(1, rs.getInt("id")); // Use the existing plan's ID
-                insertVersionPstmt.setString(2, String.join(";", roomDetails)); // Store room details
-                insertVersionPstmt.setString(3, loggedInAdminUsername);
-                insertVersionPstmt.setInt(4, loggedInAdminPriority);
+                insertVersionPstmt.setString(2, loggedInAdminUsername);
+                insertVersionPstmt.setInt(3, loggedInAdminPriority);
+                insertVersionPstmt.setInt(4, roomDetails.size()); // Number of rooms
+                insertVersionPstmt.setString(5, formattedRoomDetails); // Room details as a single string
                 insertVersionPstmt.executeUpdate();
 
                 System.out.println("\n[SUCCESS] The version has been stored successfully.\n");
@@ -261,17 +273,19 @@ public class AdminService {
                 System.out.println("\n[ERROR] Unable to update the plan due to low priority, but the version will be saved.");
 
                 // Store the version but do not update the final plan
-                String insertVersionSql = "INSERT INTO floor_plan_versions (floor_plan_id, previous_plan_details, finalised_by, priority) " +
-                        "VALUES (?, ?, ?, ?)";
+                String insertVersionSql = "INSERT INTO floor_plan_versions (floor_plan_id,finalised_by, priority,number_of_rooms, room_details) " +
+                        "VALUES (?, ?, ?, ?, ?)";
                 PreparedStatement insertVersionPstmt = conn.prepareStatement(insertVersionSql);
                 insertVersionPstmt.setInt(1, rs.getInt("id")); // Use the existing plan's ID
-                insertVersionPstmt.setString(2, String.join(";", roomDetails)); // Store room details
-                insertVersionPstmt.setString(3, loggedInAdminUsername);
-                insertVersionPstmt.setInt(4, loggedInAdminPriority);
+                insertVersionPstmt.setString(2, loggedInAdminUsername);
+                insertVersionPstmt.setInt(3, loggedInAdminPriority);
+                insertVersionPstmt.setInt(4, roomDetails.size()); // Number of rooms
+                insertVersionPstmt.setString(5, formattedRoomDetails); // Room details as a single string
                 insertVersionPstmt.executeUpdate();
 
                 System.out.println("\n[SUCCESS] Version stored successfully.\n");
             } else {
+
                 // **Step to delete existing rooms for the floor**
                 System.out.println("\nDeleting previous rooms for the floor...");
 
@@ -317,6 +331,7 @@ public class AdminService {
                 updateTotalRoomsPstmt.setInt(2, floorId); // Use the existing floor ID
                 updateTotalRoomsPstmt.executeUpdate();
                 System.out.println("\n[SUCCESS] Successfully updated the total number of rooms for floor " + floorNumber + "\n");
+
             }
             System.out.println("-------------------------------------------------------------------\n");
         } catch (SQLException e) {

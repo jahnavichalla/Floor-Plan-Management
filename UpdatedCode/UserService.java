@@ -6,9 +6,11 @@ import java.util.stream.Collectors;
 public class UserService {
 
     private Connection conn;
+    private String loggedInUserUsername;
 
-    public UserService(Connection conn) {
+    public UserService(Connection conn,String loggedInUserUsername) {
         this.conn = conn;
+        this.loggedInUserUsername=loggedInUserUsername;
     }
 
     // User menu
@@ -203,7 +205,7 @@ public class UserService {
                             int roomIdToBook = recommendedRoomIds.get(roomNumber - 1);
                             String roomNameToBook = recommendedRoomNames.get(roomNumber - 1);
                             // Mark room as booked
-                            bookRoom(roomIdToBook, roomNameToBook, startTime, endTime);
+                            bookRoom(roomIdToBook, roomNameToBook, startTime, endTime,loggedInUserUsername);
                             System.out.println("Room booked: " + roomNameToBook + " on floor " + preferredFloorNumber);
                         } else {
                             System.out.println("Invalid room number selected.");
@@ -242,7 +244,7 @@ public class UserService {
             String bookChoice = sc.nextLine();
             if (bookChoice.equalsIgnoreCase("yes")) {
                 // Mark room as booked
-                bookRoom(roomId, roomName, startTime, endTime);
+                bookRoom(roomId, roomName, startTime, endTime,loggedInUserUsername);
                 System.out.println("Room booked: " + roomName + " on floor " + preferredFloorNumber);
             } else {
                 System.out.println("Sorry!!! We would like to host u the next time.");  // User chose not to book
@@ -250,56 +252,63 @@ public class UserService {
         } else {
             System.out.println("No rooms available on your preferred floor.");
 
-            // Step 7: Recommend nearby floors
-            List<Integer> nearbyFloorRoomIds = new ArrayList<>();
+        String availableRoomsSql = "SELECT r.id, r.room_name, r.capacity, f.floor_number " +
+                                   "FROM rooms r " +
+                                   "JOIN floors f ON r.floor_id = f.id " +
+                                   "WHERE r.id NOT IN (SELECT room_id FROM bookings WHERE (start_time < ? AND end_time > ?)) " +
+                                   "AND r.capacity >= ?";
+        
+        PreparedStatement availableRoomsPstmt = conn.prepareStatement(availableRoomsSql);
+        availableRoomsPstmt.setString(1, endTime);
+        availableRoomsPstmt.setString(2, startTime);
+        availableRoomsPstmt.setInt(3, minCapacity);
 
-            // Check for rooms on lower floor
-            String lowerFloorSql = "SELECT * FROM rooms WHERE id IN (" +
-                                   capacityRoomIds.stream().map(String::valueOf).collect(Collectors.joining(",")) + ") " +
-                                   "AND floor_id = ?";
-            PreparedStatement lowerFloorPstmt = conn.prepareStatement(lowerFloorSql);
-            lowerFloorPstmt.setInt(1, preferredFloorId - 1); // Use floor_id
-            ResultSet lowerFloorRs = lowerFloorPstmt.executeQuery();
-            while (lowerFloorRs.next()) {
-                nearbyFloorRoomIds.add(lowerFloorRs.getInt("id"));
-            }
+        ResultSet availableRoomsRs = availableRoomsPstmt.executeQuery();
 
-            // Check for rooms on upper floor
-            String upperFloorSql = "SELECT * FROM rooms WHERE id IN (" +
-                                   capacityRoomIds.stream().map(String::valueOf).collect(Collectors.joining(",")) + ") " +
-                                   "AND floor_id = ?";
-            PreparedStatement upperFloorPstmt = conn.prepareStatement(upperFloorSql);
-            upperFloorPstmt.setInt(1, preferredFloorId + 1); // Use floor_id
-            ResultSet upperFloorRs = upperFloorPstmt.executeQuery();
-            while (upperFloorRs.next()) {
-                nearbyFloorRoomIds.add(upperFloorRs.getInt("id"));
-            }
+        // Step 2: Organize available rooms by floor distance from the preferred floor
+        TreeMap<Integer, List<Room>> floorDistanceMap = new TreeMap<>();
 
-            // Step 8: Check if any rooms are available on nearby floors
-            if (!nearbyFloorRoomIds.isEmpty()) {
-                String nearbyRoomsSql = "SELECT * FROM rooms WHERE id IN (" +
-                                         nearbyFloorRoomIds.stream().map(String::valueOf).collect(Collectors.joining(",")) + ")";
-                PreparedStatement nearbyRoomsPstmt = conn.prepareStatement(nearbyRoomsSql);
-                ResultSet nearbyRoomsRs = nearbyRoomsPstmt.executeQuery();
+        while (availableRoomsRs.next()) {
+            int roomId = availableRoomsRs.getInt("id");
+            String roomName = availableRoomsRs.getString("room_name");
+            int roomCapacity = availableRoomsRs.getInt("capacity");
+            int floorNumber = availableRoomsRs.getInt("floor_number");
 
-                if (nearbyRoomsRs.next()) {
-                    int roomId = nearbyRoomsRs.getInt("id");
-                    String roomName = nearbyRoomsRs.getString("room_name");
-                    
-                    // Ask if the user wants to book this room
-                    System.out.print("Recommended room on a nearby floor: " + roomName + ". Would you like to book this room? (yes/no): ");
-                    String nearbyBookChoice = sc.nextLine();
-                    if (nearbyBookChoice.equalsIgnoreCase("yes")) {
-                        // Mark room as booked
-                        bookRoom(roomId, roomName, startTime, endTime);
-                        System.out.println("Room booked: " + roomName);
-                    } else {
-                        System.out.println("Sorry!!!");  // User chose not to book
-                    }
+            // Calculate the distance from the preferred floor
+            int distance = Math.abs(preferredFloorNumber - floorNumber);
+
+            // Add the room to the map based on its floor distance
+            Room room = new Room(roomId, roomName, roomCapacity, floorNumber);
+            floorDistanceMap.computeIfAbsent(distance, k -> new ArrayList<>()).add(room);
+        }
+
+        // Step 3: Recommend rooms from the nearest floors
+        boolean roomRecommended = false;
+        for (Map.Entry<Integer, List<Room>> entry : floorDistanceMap.entrySet()) {
+            List<Room> roomsOnFloor = entry.getValue();
+            for (Room room : roomsOnFloor) {
+                System.out.println("Recommended room: " + room.getRoomName() + " on floor " + room.getFloorNumber() +
+                                   " (Capacity: " + room.getCapacity() + ")");
+                
+                // Ask if the user wants to book this room
+                System.out.print("Would you like to book this room? (yes/no): ");
+                String choice = sc.nextLine();
+
+                if (choice.equalsIgnoreCase("yes")) {
+                    // Book the room
+                    bookRoom(room.getId(), room.getRoomName(), startTime, endTime, loggedInUserUsername);
+                    System.out.println("Room booked: " + room.getRoomName() + " on floor " + room.getFloorNumber());
+                    roomRecommended = true;
+                    break;
                 }
-            } else {
-                System.out.println("No rooms available on nearby floors.");
             }
+            if (roomRecommended) break;
+        }
+
+        // Step 4: If no rooms were booked, notify the user
+        if (!roomRecommended) {
+            System.out.println("No rooms booked. All nearby options were declined.");
+        }
         }
         System.out.println("--------------------------------------------------------------------\n");
     } catch (SQLException e) {
@@ -308,14 +317,27 @@ public class UserService {
     }
 
     // Book room method
-    public void bookRoom(int roomId, String roomName, String startTime, String endTime) {
+    public void bookRoom(int roomId, String roomName, String startTime, String endTime,String user_name) {
         try {
+            //get userid from username
+            String sql="SELECT id FROM users WHERE username=?";
+            PreparedStatement stmt=conn.prepareStatement(sql);
+            stmt.setString(1,user_name);
+            ResultSet rs=stmt.executeQuery();
+            if(!rs.next())
+            {
+                System.out.println("No user found with given name");
+                return;
+            }
+            int userid=rs.getInt("id");
+            
             // Insert booking into the bookings table
-            String bookingSql = "INSERT INTO bookings (room_id, start_time, end_time) VALUES (?, ?, ?)";
+            String bookingSql = "INSERT INTO bookings (room_id, start_time, end_time,user_id) VALUES (?, ?, ?,?)";
             PreparedStatement pstmt = conn.prepareStatement(bookingSql);
             pstmt.setInt(1, roomId);
             pstmt.setString(2, startTime);
             pstmt.setString(3, endTime);
+            pstmt.setInt(4,userid);
             pstmt.executeUpdate();
 
             // Mark the room as unavailable
@@ -329,4 +351,23 @@ public class UserService {
             e.printStackTrace();
         }
     }
+
+    static class Room {
+    private int id;
+    private String roomName;
+    private int capacity;
+    private int floorNumber;
+
+    public Room(int id, String roomName, int capacity, int floorNumber) {
+        this.id = id;
+        this.roomName = roomName;
+        this.capacity = capacity;
+        this.floorNumber = floorNumber;
+    }
+
+    public int getId() { return id; }
+    public String getRoomName() { return roomName; }
+    public int getCapacity() { return capacity; }
+    public int getFloorNumber() { return floorNumber; }
+}
 }

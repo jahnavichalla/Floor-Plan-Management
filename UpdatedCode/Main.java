@@ -9,7 +9,8 @@ public class Main {
     static final String DB_URL = "jdbc:mysql://localhost/FloorManagementDb?useSSL=false";
     static final String USER = "Nikki"; // Add your user 
     static final String PASS = "Nikki@2002"; // Add password
-    static String loggedInAdminUsername = null;  
+    static String loggedInAdminUsername = null;
+    static String loggedInUserUsername=null;
     static int loggedInAdminPriority = -1;
 
     public static void main(String[] args) {
@@ -25,7 +26,7 @@ public class Main {
         System.out.println("Attempting to connect to the database...");
         while (!connectionEstablished) {
             try {
-                if (System.currentTimeMillis() - startTime >=10) {
+                if (System.currentTimeMillis() - startTime >=0) {
                     System.out.println("Connecting to database...");
                     conn = DriverManager.getConnection(DB_URL, USER, PASS);
                     System.out.println("Connection successful!");
@@ -173,7 +174,8 @@ public class Main {
             if (rs.next()) {
                 System.out.println("\n[Success] Login successful! Welcome, " + username + " (" + role + ")\n");
                 if (role.equals("user")) {
-                    UserService userService = new UserService(conn);
+                    loggedInUserUsername=rs.getString("username");
+                    UserService userService = new UserService(conn,loggedInUserUsername);
                     userService.userMenu(sc);  // Call user menu
                 } else {
                     loggedInAdminUsername = rs.getString("username");
